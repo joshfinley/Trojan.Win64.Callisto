@@ -17,6 +17,12 @@ msg_waitall     equ 8
 ; WSA constants
 wsadescription_len  equ 256
 wsasys_status_len   equ 128
+sd_recv             equ 0
+sd_send             equ 1
+sd_both             equ 2
+sol_socket          equ 0xffff
+so_rcvtimeo         equ 0x1006
+wsatimedout         equ 0x10060
 
 ;
 ; Function prototypes
@@ -28,11 +34,13 @@ closesocket         proto :dword
 inet_addr           proto :qword
 inet_pton           proto :qword
 WSAStartup          proto :word, :qword
+shutdown            proto :dword, :dword
 socket              proto :dword, :dword, :dword
 connect             proto :dword, :qword, :dword
 send                proto :dword, :qword, :dword, :dword
 recv                proto :dword, :qword, :dword, :dword
 getaddrinfo         proto :qword, :qword, :qword, :qword
+setsockopt          proto :dword, :dword, :dword, :qword, :dword
 
 ;
 ; Structures
@@ -89,5 +97,11 @@ addrinfo struct
     ai_addr         qword ?
     ai_next         qword ?
 addrinfo ends
+
+timeval struct
+    tv_sec          word ?           ; Seconds
+    tv_usec         word ?           ; Microseconds
+timeval ends
+
 
 endif ; !_winsock_inc
