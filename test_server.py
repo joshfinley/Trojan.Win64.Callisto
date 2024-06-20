@@ -52,7 +52,7 @@ def main():
             print("Sent CMD_READY to client")
 
             # Simulate sending a command (e.g., 'echo Hello, World!')
-            command = 'echo Hello, World!'
+            command = 'cmd.exe /c copy /b NUL c:\\Windows\\temp\\test.txt\0'
             cipher_key = 0x01  # Example cipher key
 
             # Send the command to execute
@@ -73,8 +73,8 @@ def main():
             # print(f"Received command execution result: {result.decode('utf-8')}")
 
             # Optionally send the exit command
-            #conn.sendall(bytes([CMD_EXIT]))
-            #print("Sent CMD_EXIT to client")
+            conn.sendall(bytes([CMD_EXIT]))
+            print("Sent CMD_EXIT to client")
             #break
 
     except Exception as e:

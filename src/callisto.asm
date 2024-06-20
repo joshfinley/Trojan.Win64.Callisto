@@ -1,4 +1,4 @@
-;  <callisto-shell.asm>   -   Callisto source
+;  <callisto.asm>   -   Callisto source
 ;                         Copyright (c) 2020 by Joshua Finley.
 ;
 
@@ -169,7 +169,7 @@ _text$00 segment align(10h) 'code'
             mov startup_info.wShowWindow, sw_hide
 
             ; Create the process
-            invoke CreateProcessA, addr comspec_path, command_buffer, 0, 0, 0, 0, 0, 0, addr startup_info, addr process_info
+            invoke CreateProcessA, 0, command_buffer, 0, 0, 0, 0, 0, 0, addr startup_info, addr process_info
             test eax, eax
             je _error
 
