@@ -1,0 +1,6 @@
+*.err
+*.exe
+*.obj
+*.pdb
+build.bat
+*.lib
