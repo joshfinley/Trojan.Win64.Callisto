@@ -17,6 +17,7 @@ handle_flag_inherit     equ 0x00000001
 ; Function prototypes
 ;
 
+Sleep                   proto :dword
 lstrlenW                proto :qword
 GetLastError            proto :qword
 CloseHandle             proto :qword

