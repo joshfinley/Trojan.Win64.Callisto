@@ -21,6 +21,7 @@ error_handle_eof        equ 38
 
 GetLastError            proto 
 Sleep                   proto :dword
+lstrlenA                proto :qword
 lstrlenW                proto :qword
 CloseHandle             proto :qword
 LocalFree               proto :qword
@@ -43,7 +44,7 @@ LoadLibraryA            proto :qword
 ; Data structures
 ;
 
-STARTUPINFOA struct
+startupinfoa struct
     cbSize          DWORD   ?                ; 4 bytes
     align 8
     lpReserved      qword   ?                ; 8 bytes
@@ -66,7 +67,7 @@ STARTUPINFOA struct
     hStdInput       qword   ?                ; 8 bytes
     hStdOutput      qword   ?                ; 8 bytes
     hStdError       qword   ?                ; 8 bytes
-STARTUPINFOA ends
+startupinfoa ends
 
 process_information struct
     hProcess        qword ?
